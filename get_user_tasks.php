@@ -1,23 +1,40 @@
 <?php
 require 'db.php';
+session_start();
 
-if (!isset($_SESSION['user_id']) || ($_SESSION['user_id'] != 1 && !userHasTask($pdo, $_SESSION['user_id'], 'USER_MGMT'))) {
-    http_response_code(403);
-    die(json_encode(['error' => 'Access denied']));
+// Set JSON header
+header('Content-Type: application/json');
+
+// Check if user is logged in
+if (!isset($_SESSION['user_id'])) {
+    echo json_encode(['error' => 'Unauthorized access']);
+    exit;
 }
 
-$user_id = $_GET['user_id'] ?? 0;
+// Check if user_id parameter is provided
+if (!isset($_GET['user_id']) || empty($_GET['user_id'])) {
+    echo json_encode(['error' => 'No user ID provided']);
+    exit;
+}
 
-// Get user's assigned tasks
-$stmt = $pdo->prepare("SELECT task_id FROM user_tasks WHERE user_id = ?");
-$stmt->execute([$user_id]);
-$user_tasks = $stmt->fetchAll(PDO::FETCH_COLUMN);
+$user_id = (int)$_GET['user_id'];
 
-// Get all tasks
-$all_tasks = getAllTasks($pdo);
-
-echo json_encode([
-    'user_tasks' => $user_tasks,
-    'all_tasks' => $all_tasks
-]);
+try {
+    // Get all available tasks
+    $allTasksStmt = $pdo->query("SELECT task_id, task_name, description FROM tasks WHERE is_active = 1 ORDER BY task_id ASC");
+    $allTasks = $allTasksStmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Get user's assigned tasks
+    $userTasksStmt = $pdo->prepare("SELECT task_id FROM user_tasks WHERE user_id = ?");
+    $userTasksStmt->execute([$user_id]);
+    $userTasks = $userTasksStmt->fetchAll(PDO::FETCH_COLUMN);
+    
+    echo json_encode([
+        'all_tasks' => $allTasks,
+        'user_tasks' => $userTasks
+    ]);
+} catch (PDOException $e) {
+    error_log("Database error in get_user_tasks.php: " . $e->getMessage());
+    echo json_encode(['error' => 'Database error occurred']);
+}
 ?>

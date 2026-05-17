@@ -18,52 +18,106 @@ function isSuperAdmin() {
            (isset($_SESSION['is_super_admin']) && $_SESSION['is_super_admin'] == 1);
 }
 
-// Only super admin or users with USER_MGMT task can access
+// Function to check if user has a specific task
+function userHasTask($pdo, $userId, $taskCode) {
+    if ($userId == 1) return true;
+    $stmt = $pdo->prepare("
+        SELECT 1 FROM user_tasks ut 
+        INNER JOIN tasks t ON ut.task_id = t.task_id 
+        WHERE ut.user_id = ? AND t.task_code = ?
+    ");
+    $stmt->execute([$userId, $taskCode]);
+    return (bool)$stmt->fetch();
+}
+
+function getAllTasks($pdo) {
+    return $pdo->query("SELECT * FROM tasks WHERE is_active = 1 ORDER BY task_id ASC")->fetchAll();
+}
+
+// Permission check
 if (!isSuperAdmin() && !userHasTask($pdo, $_SESSION['user_id'], 'USER_MGMT')) {
     die("Access denied. You don't have permission to manage users.");
 }
 
 // Handle Add User
 if (isset($_POST['add_user'])) {
-    $stmt = $pdo->prepare("INSERT INTO users (username, password, name, role, is_active, is_super_admin) VALUES (?, ?, ?, ?, 1, 0)");
-    $stmt->execute([
-        $_POST['username'], 
-        $_POST['password'], 
-        $_POST['name'], 
-        $_POST['role']
-    ]);
-    $new_user_id = $pdo->lastInsertId();
+    $username = trim($_POST['username']);
+    $password = $_POST['password'];
+    $name = trim($_POST['name']);
+    $role = $_POST['role'];
     
-    // Assign selected tasks
-    if (isset($_POST['tasks']) && is_array($_POST['tasks'])) {
-        $assign_stmt = $pdo->prepare("INSERT INTO user_tasks (user_id, task_id, assigned_by) VALUES (?, ?, ?)");
-        foreach ($_POST['tasks'] as $task_id) {
-            $assign_stmt->execute([$new_user_id, $task_id, $_SESSION['user_id']]);
+    $check = $pdo->prepare("SELECT user_id FROM users WHERE username = ?");
+    $check->execute([$username]);
+    if ($check->fetch()) {
+        $error_msg = "Username already exists!";
+    } else {
+        $stmt = $pdo->prepare("INSERT INTO users (username, password, name, role, is_active) VALUES (?, ?, ?, ?, 1)");
+        $stmt->execute([$username, $password, $name, $role]);
+        $new_user_id = $pdo->lastInsertId();
+        
+        if (isset($_POST['tasks']) && is_array($_POST['tasks'])) {
+            $assign_stmt = $pdo->prepare("INSERT INTO user_tasks (user_id, task_id, assigned_by, assigned_at) VALUES (?, ?, ?, NOW())");
+            foreach ($_POST['tasks'] as $task_id) {
+                $assign_stmt->execute([$new_user_id, $task_id, $_SESSION['user_id']]);
+            }
         }
+        
+        header("Location: users.php?msg=added");
+        exit;
     }
-    
-    header("Location: users.php?msg=added");
-    exit;
 }
 
 // Handle Edit User Tasks
 if (isset($_POST['edit_tasks'])) {
-    // Remove existing assignments
-    $pdo->prepare("DELETE FROM user_tasks WHERE user_id = ?")->execute([$_POST['user_id']]);
+    $user_id = $_POST['user_id'];
     
-    // Add new assignments
-    if (isset($_POST['tasks']) && is_array($_POST['tasks'])) {
-        $assign_stmt = $pdo->prepare("INSERT INTO user_tasks (user_id, task_id, assigned_by) VALUES (?, ?, ?)");
-        foreach ($_POST['tasks'] as $task_id) {
-            $assign_stmt->execute([$_POST['user_id'], $task_id, $_SESSION['user_id']]);
+    if ($user_id == 1) {
+        $error_msg = "Cannot modify root user tasks!";
+    } else {
+        $pdo->prepare("DELETE FROM user_tasks WHERE user_id = ?")->execute([$user_id]);
+        
+        if (isset($_POST['tasks']) && is_array($_POST['tasks'])) {
+            $assign_stmt = $pdo->prepare("INSERT INTO user_tasks (user_id, task_id, assigned_by, assigned_at) VALUES (?, ?, ?, NOW())");
+            foreach ($_POST['tasks'] as $task_id) {
+                $assign_stmt->execute([$user_id, $task_id, $_SESSION['user_id']]);
+            }
         }
+        
+        header("Location: users.php?msg=updated");
+        exit;
     }
-    
-    header("Location: users.php?msg=updated");
-    exit;
 }
 
-// Handle Status Toggle (Protect user_id 1)
+// Handle Edit User Details
+if (isset($_POST['edit_user_details'])) {
+    $user_id = $_POST['user_id'];
+    
+    if ($user_id == 1 && !isSuperAdmin()) {
+        $error_msg = "Cannot modify root user!";
+    } else {
+        $name = trim($_POST['name']);
+        $role = $_POST['role'];
+        $password = trim($_POST['password']);
+        
+        if (!empty($password)) {
+            $stmt = $pdo->prepare("UPDATE users SET name = ?, role = ?, password = ? WHERE user_id = ?");
+            $stmt->execute([$name, $role, $password, $user_id]);
+        } else {
+            $stmt = $pdo->prepare("UPDATE users SET name = ?, role = ? WHERE user_id = ?");
+            $stmt->execute([$name, $role, $user_id]);
+        }
+        
+        if ($user_id == $_SESSION['user_id']) {
+            $_SESSION['username'] = $name;
+            $_SESSION['role'] = $role;
+        }
+        
+        header("Location: users.php?msg=details_updated");
+        exit;
+    }
+}
+
+// Handle Status Toggle
 if (isset($_GET['toggle']) && $_GET['toggle'] != 1) {
     $stmt = $pdo->prepare("UPDATE users SET is_active = NOT is_active WHERE user_id = ?");
     $stmt->execute([$_GET['toggle']]);
@@ -71,8 +125,9 @@ if (isset($_GET['toggle']) && $_GET['toggle'] != 1) {
     exit;
 }
 
-// Handle Delete (Protect user_id 1)
+// Handle Delete
 if (isset($_GET['delete']) && $_GET['delete'] != 1) {
+    $pdo->prepare("DELETE FROM user_tasks WHERE user_id = ?")->execute([$_GET['delete']]);
     $stmt = $pdo->prepare("DELETE FROM users WHERE user_id = ?");
     $stmt->execute([$_GET['delete']]);
     header("Location: users.php?msg=deleted");
@@ -82,27 +137,36 @@ if (isset($_GET['delete']) && $_GET['delete'] != 1) {
 $users = $pdo->query("SELECT * FROM users ORDER BY user_id")->fetchAll();
 $all_tasks = getAllTasks($pdo);
 
-// Get user's assigned tasks for edit modal
-$user_tasks = [];
-if (isset($_GET['edit_user'])) {
-    $stmt = $pdo->prepare("SELECT task_id FROM user_tasks WHERE user_id = ?");
-    $stmt->execute([$_GET['edit_user']]);
-    $user_tasks = $stmt->fetchAll(PDO::FETCH_COLUMN);
+// Get edit data if edit parameter is set
+$edit_user = null;
+$edit_user_tasks = [];
+if (isset($_GET['edit_user_id'])) {
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ?");
+    $stmt->execute([$_GET['edit_user_id']]);
+    $edit_user = $stmt->fetch();
+    
+    $task_stmt = $pdo->prepare("SELECT task_id FROM user_tasks WHERE user_id = ?");
+    $task_stmt->execute([$_GET['edit_user_id']]);
+    $edit_user_tasks = $task_stmt->fetchAll(PDO::FETCH_COLUMN);
 }
 
 $success_msg = '';
+$error_msg = $error_msg ?? '';
+
 if (isset($_GET['msg'])) {
     switch($_GET['msg']) {
-        case 'added': $success_msg = 'User added successfully!'; break;
-        case 'updated': $success_msg = 'User tasks updated successfully!'; break;
-        case 'deleted': $success_msg = 'User deleted successfully!'; break;
+        case 'added': $success_msg = '✓ User added successfully!'; break;
+        case 'updated': $success_msg = '✓ User tasks updated successfully!'; break;
+        case 'details_updated': $success_msg = '✓ User details updated successfully!'; break;
+        case 'deleted': $success_msg = '✓ User deleted successfully!'; break;
     }
 }
 
-// Get statistics
 $totalUsers = count($users);
 $activeUsers = count(array_filter($users, function($u) { return $u['is_active']; }));
+$totalTasksAssigned = $pdo->query("SELECT COUNT(*) FROM user_tasks")->fetchColumn();
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -117,12 +181,10 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
         .custom-scroll::-webkit-scrollbar { width: 4px; }
         .custom-scroll::-webkit-scrollbar-thumb { background: #dc2626; border-radius: 10px; }
         .footer-gradient { background: linear-gradient(135deg, #0f172a 0%, #020617 100%); }
-        .stat-card {
-            transition: all 0.3s ease;
-        }
-        .stat-card:hover {
-            transform: translateY(-5px);
-        }
+        .stat-card { transition: all 0.3s ease; }
+        .stat-card:hover { transform: translateY(-5px); }
+        .glass-card { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.05); }
+        .modal-transition { transition: all 0.3s ease; }
     </style>
 </head>
 <body class="bg-[#020617] text-slate-300">
@@ -136,13 +198,13 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
                 </div>
                 <nav class="flex-1 px-6 space-y-1.5 pb-6">
                     <a href="dashboard.php" class="flex items-center p-4 hover:bg-slate-800/50 rounded-2xl transition group text-slate-500 hover:text-white">
-                        <span class="text-[10px] uppercase font-black tracking-widest">Dashboard</span>
+                        <span class="text-[10px] uppercase font-black tracking-widest">📊 Dashboard</span>
                     </a>
                     <a href="users.php" class="flex items-center p-4 bg-red-600/10 text-red-500 rounded-2xl border border-red-600/20 transition">
-                        <span class="text-[10px] uppercase font-black tracking-widest">User Management</span>
+                        <span class="text-[10px] uppercase font-black tracking-widest">👥 User Management</span>
                     </a>
                     <a href="logout.php" class="flex items-center p-4 hover:bg-slate-800/50 rounded-2xl transition group text-slate-500 hover:text-white mt-4">
-                        <span class="text-[10px] uppercase font-black tracking-widest">Logout</span>
+                        <span class="text-[10px] uppercase font-black tracking-widest">🔒 Logout</span>
                     </a>
                 </nav>
                 <div class="p-6 bg-slate-900/50 border-t border-slate-800">
@@ -158,7 +220,6 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
                             <?php endif; ?>
                         </div>
                     </div>
-                    <a href="logout.php" class="mt-6 text-[9px] font-black uppercase text-slate-600 hover:text-red-500 tracking-tighter block transition">End Secure Session</a>
                 </div>
             </aside>
 
@@ -167,10 +228,16 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
                 <header class="flex justify-between items-start mb-12">
                     <div>
                         <h1 class="text-6xl font-black text-white italic tracking-tighter uppercase leading-none">User <span class="text-red-600">Management</span></h1>
-                        <p class="text-slate-500 text-[10px] font-black uppercase tracking-[0.4em] mt-3 flex items-center">
-                            <span class="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
-                            Manage system operators and their permissions
-                        </p>
+                        <div class="flex items-center gap-4 mt-3">
+                            <p class="text-slate-500 text-[10px] font-black uppercase tracking-[0.4em] flex items-center">
+                                <span class="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+                                Manage system operators and their permissions
+                            </p>
+                            <a href="dashboard.php" class="text-xs bg-slate-800 hover:bg-slate-700 text-white font-bold py-1 px-3 rounded-xl border border-slate-700 transition flex items-center gap-1.5">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                                Back to Dashboard
+                            </a>
+                        </div>
                     </div>
                     <div class="bg-slate-900/80 px-10 py-6 rounded-[2.5rem] border border-slate-800 text-right shadow-2xl glass-card">
                         <p class="text-4xl font-black text-red-600 tracking-tighter italic" id="clock">00:00:00</p>
@@ -178,8 +245,18 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
                     </div>
                 </header>
 
+                <!-- Action Buttons -->
+                <div class="flex justify-between items-center mb-6">
+                    <div class="flex gap-3">
+                        <a href="?add=1" class="bg-red-600 hover:bg-red-700 text-white font-black text-xs uppercase tracking-wider px-6 py-3.5 rounded-xl transition shadow-lg shadow-red-600/10 flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                            Add New Operator
+                        </a>
+                    </div>
+                </div>
+
                 <!-- Stats Cards -->
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
                     <div class="stat-card bg-gradient-to-br from-red-600/20 to-transparent p-6 rounded-2xl border border-red-900/30">
                         <p class="text-[10px] font-black text-red-500 uppercase tracking-widest">Total Operators</p>
                         <h3 class="text-3xl font-black text-white mt-2"><?= $totalUsers ?></h3>
@@ -192,8 +269,13 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
                         <p class="text-[10px] font-black text-blue-500 uppercase tracking-widest">Total Tasks</p>
                         <h3 class="text-3xl font-black text-white mt-2"><?= count($all_tasks) ?></h3>
                     </div>
+                    <div class="stat-card bg-gradient-to-br from-purple-600/20 to-transparent p-6 rounded-2xl border border-purple-900/30">
+                        <p class="text-[10px] font-black text-purple-500 uppercase tracking-widest">Tasks Assigned</p>
+                        <h3 class="text-3xl font-black text-white mt-2"><?= $totalTasksAssigned ?></h3>
+                    </div>
                 </div>
 
+                <!-- Messages -->
                 <?php if($success_msg): ?>
                     <div class="bg-green-500/10 border border-green-500/20 text-green-500 p-4 rounded-2xl mb-6">
                         <div class="flex items-center gap-3">
@@ -204,7 +286,19 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
                         </div>
                     </div>
                 <?php endif; ?>
+                
+                <?php if($error_msg): ?>
+                    <div class="bg-red-500/10 border border-red-500/20 text-red-500 p-4 rounded-2xl mb-6">
+                        <div class="flex items-center gap-3">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <?= $error_msg ?>
+                        </div>
+                    </div>
+                <?php endif; ?>
 
+                <!-- Users Table -->
                 <div class="bg-[#0f172a] rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
                     <div class="overflow-x-auto">
                         <table class="w-full text-left">
@@ -219,38 +313,40 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
                             </thead>
                             <tbody class="divide-y divide-slate-800">
                                 <?php foreach($users as $u): ?>
-                                <tr class="hover:bg-slate-800/30 transition">
+                                <tr class="hover:bg-slate-800/30 transition group">
                                     <td class="p-6">
                                         <div class="flex items-center gap-3">
-                                            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-red-600/20 to-red-600/5 flex items-center justify-center text-red-500 font-bold">
+                                            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-red-600/20 to-red-600/5 flex items-center justify-center text-red-500 font-bold text-lg">
                                                 <?= strtoupper(substr($u['name'], 0, 1)) ?>
                                             </div>
                                             <div>
                                                 <span class="text-white font-bold block"><?= htmlspecialchars($u['name']) ?></span>
                                                 <span class="text-xs text-slate-500">@<?= htmlspecialchars($u['username']) ?></span>
                                                 <?php if($u['user_id'] == 1): ?>
-                                                    <span class="text-[8px] bg-yellow-600/20 text-yellow-500 px-2 py-0.5 rounded-full ml-2">ROOT</span>
+                                                    <span class="text-[8px] bg-yellow-600/20 text-yellow-500 px-2 py-0.5 rounded-full ml-2 inline-block">ROOT</span>
                                                 <?php endif; ?>
                                             </div>
                                         </div>
                                     </td>
                                     <td class="p-6">
-                                        <span class="bg-slate-800 px-3 py-1 rounded-full text-xs font-bold"><?= htmlspecialchars($u['role']) ?></span>
+                                        <span class="bg-slate-800 px-3 py-1.5 rounded-full text-xs font-bold"><?= htmlspecialchars($u['role']) ?></span>
                                     </td>
                                     <td class="p-6">
                                         <?php
                                         $task_stmt = $pdo->prepare("
-                                            SELECT t.task_name, t.task_code FROM tasks t
+                                            SELECT t.task_code FROM tasks t
                                             INNER JOIN user_tasks ut ON t.task_id = ut.task_id
                                             WHERE ut.user_id = ?
                                         ");
                                         $task_stmt->execute([$u['user_id']]);
                                         $tasks = $task_stmt->fetchAll();
                                         ?>
-                                        <div class="flex flex-wrap gap-1">
+                                        <div class="flex flex-wrap gap-1.5">
                                             <?php if(count($tasks) > 0): ?>
                                                 <?php foreach($tasks as $task): ?>
-                                                    <span class="bg-blue-600/20 text-blue-400 px-2 py-1 rounded text-[10px] font-bold"><?= htmlspecialchars($task['task_name']) ?></span>
+                                                    <span class="bg-blue-600/20 text-blue-400 px-2.5 py-1 rounded-lg text-[9px] font-bold uppercase tracking-wider">
+                                                        <?= htmlspecialchars($task['task_code']) ?>
+                                                    </span>
                                                 <?php endforeach; ?>
                                             <?php else: ?>
                                                 <span class="text-slate-600 text-[10px] italic">No tasks assigned</span>
@@ -260,11 +356,13 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
                                     <td class="p-6">
                                         <?php if($u['user_id'] == 1): ?>
                                             <span class="text-yellow-500 text-xs font-bold flex items-center gap-1">
-                                                <div class="w-2 h-2 rounded-full bg-yellow-500"></div>
+                                                <div class="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></div>
                                                 PROTECTED
                                             </span>
                                         <?php else: ?>
-                                            <a href="?toggle=<?= $u['user_id'] ?>" class="<?= $u['is_active'] ? 'text-green-500' : 'text-red-500' ?> text-xs font-bold underline hover:no-underline flex items-center gap-1">
+                                            <a href="?toggle=<?= $u['user_id'] ?>" 
+                                               onclick="return confirm('Toggle user status?')"
+                                               class="<?= $u['is_active'] ? 'text-green-500' : 'text-red-500' ?> text-xs font-bold underline hover:no-underline flex items-center gap-1">
                                                 <div class="w-2 h-2 rounded-full <?= $u['is_active'] ? 'bg-green-500' : 'bg-red-500' ?>"></div>
                                                 <?= $u['is_active'] ? 'Active' : 'Deactivated' ?>
                                             </a>
@@ -272,17 +370,13 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
                                     </td>
                                     <td class="p-6 text-right space-x-3">
                                         <?php if($u['user_id'] != 1): ?>
-                                            <button onclick="editUserTasks(<?= $u['user_id'] ?>, '<?= htmlspecialchars($u['name']) ?>')" 
-                                                    class="text-blue-500 hover:text-blue-400 text-xs font-bold uppercase tracking-wider transition">
-                                                Edit Tasks
-                                            </button>
+                                            <a href="?edit_user_id=<?= $u['user_id'] ?>" class="text-blue-500 hover:text-blue-400 text-xs font-bold uppercase tracking-wider transition">✏️ Edit</a>
+                                            <a href="?edit_tasks_id=<?= $u['user_id'] ?>" class="text-purple-500 hover:text-purple-400 text-xs font-bold uppercase tracking-wider transition">📋 Tasks</a>
                                             <a href="?delete=<?= $u['user_id'] ?>" 
-                                               onclick="return confirm('⚠️ WARNING: This action cannot be undone!\n\nAre you sure you want to delete this operator?')" 
-                                               class="text-red-500 hover:text-red-400 text-xs font-bold uppercase tracking-wider transition">
-                                                Delete
-                                            </a>
+                                               onclick="return confirm('⚠️ Delete this user?')" 
+                                               class="text-red-500 hover:text-red-400 text-xs font-bold uppercase tracking-wider transition">🗑 Delete</a>
                                         <?php else: ?>
-                                            <span class="text-slate-600 text-[10px] uppercase tracking-wider">System Protected</span>
+                                            <span class="text-slate-600 text-[10px] uppercase tracking-wider italic">System Protected</span>
                                         <?php endif; ?>
                                     </td>
                                 </tr>
@@ -294,7 +388,6 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
             </main>
         </div>
 
-        <!-- Footer -->
         <footer class="footer-gradient border-t border-slate-800 no-print ml-72">
             <div class="max-w-full px-10 py-6">
                 <div class="flex flex-col md:flex-row justify-between items-center gap-4">
@@ -311,72 +404,56 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
                             </p>
                         </div>
                     </div>
-                    <div class="flex gap-6">
-                        <a href="https://vexelit.xyz" target="_blank" class="text-[10px] text-slate-500 hover:text-red-500 transition font-black uppercase tracking-wider flex items-center gap-2">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.66 0 3-4 3-9s-1.34-9-3-9m0 18c-1.66 0-3-4-3-9s1.34-9 3-9m-9 9a9 9 0 019-9"></path>
-                            </svg>
-                            vexelit.xyz
-                        </a>
-                        <a href="mailto:vexelit.sl@gmail.com" class="text-[10px] text-slate-500 hover:text-red-500 transition font-black uppercase tracking-wider flex items-center gap-2">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
-                            </svg>
-                            vexelit.sl@gmail.com
-                        </a>
-                    </div>
-                </div>
-                <div class="text-center mt-4">
-                    <p class="text-[7px] text-slate-700 font-mono tracking-wider">
-                        &copy; <?= date('Y') ?> Vexel IT Solutions. All rights reserved. | Secure Enterprise Grade System
-                    </p>
                 </div>
             </div>
         </footer>
     </div>
 
     <!-- Add User Modal -->
-    <div id="addModal" class="fixed inset-0 bg-black/95 backdrop-blur-xl z-50 hidden flex items-center justify-center p-4">
-        <div class="bg-[#0f172a] border border-slate-800 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <?php if(isset($_GET['add'])): ?>
+    <div id="addModal" class="fixed inset-0 bg-black/95 backdrop-blur-xl z-50 flex items-center justify-center p-4 modal-transition" style="display: flex;">
+        <div class="bg-[#0f172a] border border-slate-800 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto custom-scroll">
             <div class="p-8">
                 <div class="flex justify-between items-center mb-6">
-                    <h3 class="text-2xl font-bold text-white">Create System Operator</h3>
-                    <button onclick="closeAddModal()" class="text-slate-500 hover:text-red-500 transition">
-                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                        </svg>
-                    </button>
-                </div>
-                <form method="POST" class="space-y-4">
                     <div>
-                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">Full Name</label>
+                        <h3 class="text-2xl font-bold text-white">Create System Operator</h3>
+                        <p class="text-slate-500 text-xs mt-1">Assign roles and permissions</p>
+                    </div>
+                    <a href="users.php" class="text-slate-500 hover:text-red-500 transition">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </a>
+                </div>
+                <form method="POST" class="space-y-5">
+                    <div>
+                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">Full Name *</label>
                         <input type="text" name="name" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-white focus:outline-none focus:border-red-600 transition" required>
                     </div>
                     <div>
-                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">Username</label>
+                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">Username *</label>
                         <input type="text" name="username" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-white focus:outline-none focus:border-red-600 transition" required>
                     </div>
                     <div>
-                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">Password (Plain Text)</label>
+                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">Password *</label>
                         <input type="text" name="password" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-white focus:outline-none focus:border-red-600 transition" required>
                     </div>
                     <div>
-                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">Role</label>
+                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">Role *</label>
                         <select name="role" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-white focus:outline-none focus:border-red-600 transition">
-                            <option>QC Operator</option>
-                            <option>Store Manager</option>
-                            <option>Admin</option>
+                            <option value="QC Operator">QC Operator</option>
+                            <option value="Store Manager">Store Manager</option>
+                            <option value="Admin">Admin</option>
+                            <option value="Supervisor">Supervisor</option>
                         </select>
                     </div>
                     <div>
-                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">Assign Tasks</label>
+                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-3">Assign Tasks</label>
                         <div class="bg-slate-900 border border-slate-700 rounded-xl p-4 space-y-2 max-h-60 overflow-y-auto custom-scroll">
                             <?php foreach($all_tasks as $task): ?>
-                                <label class="flex items-start gap-3 cursor-pointer hover:bg-slate-800 p-3 rounded-lg transition">
+                                <label class="flex items-start gap-3 cursor-pointer hover:bg-slate-800/50 p-3 rounded-lg transition">
                                     <input type="checkbox" name="tasks[]" value="<?= $task['task_id'] ?>" class="w-4 h-4 mt-1 rounded border-slate-600">
                                     <div class="flex-1">
                                         <span class="text-white text-sm font-bold block"><?= htmlspecialchars($task['task_name']) ?></span>
-                                        <p class="text-slate-500 text-xs mt-0.5"><?= htmlspecialchars($task['description']) ?></p>
+                                        <p class="text-slate-500 text-xs mt-0.5"><?= htmlspecialchars($task['description'] ?? 'No description') ?></p>
                                     </div>
                                 </label>
                             <?php endforeach; ?>
@@ -384,127 +461,111 @@ $activeUsers = count(array_filter($users, function($u) { return $u['is_active'];
                     </div>
                     <div class="flex gap-4 pt-4">
                         <button type="submit" name="add_user" class="flex-1 bg-red-600 hover:bg-red-700 py-4 rounded-xl font-black text-white transition text-xs uppercase tracking-wider">CREATE OPERATOR</button>
-                        <button type="button" onclick="closeAddModal()" class="px-8 bg-slate-800 hover:bg-slate-700 rounded-xl text-white transition text-xs font-black uppercase tracking-wider">CANCEL</button>
+                        <a href="users.php" class="px-8 bg-slate-800 hover:bg-slate-700 rounded-xl text-white transition text-xs font-black uppercase tracking-wider flex items-center justify-center">CANCEL</a>
                     </div>
                 </form>
             </div>
         </div>
     </div>
+    <?php endif; ?>
 
-    <!-- Edit Tasks Modal -->
-    <div id="editModal" class="fixed inset-0 bg-black/95 backdrop-blur-xl z-50 hidden flex items-center justify-center p-4">
-        <div class="bg-[#0f172a] border border-slate-800 rounded-3xl w-full max-w-2xl">
+    <!-- Edit User Details Modal -->
+    <?php if(isset($_GET['edit_user_id']) && $edit_user): ?>
+    <div id="editDetailsModal" class="fixed inset-0 bg-black/95 backdrop-blur-xl z-50 flex items-center justify-center p-4 modal-transition" style="display: flex;">
+        <div class="bg-[#0f172a] border border-slate-800 rounded-3xl w-full max-w-md">
             <div class="p-8">
                 <div class="flex justify-between items-center mb-6">
-                    <h3 class="text-2xl font-bold text-white">Edit User Tasks</h3>
-                    <button onclick="closeEditModal()" class="text-slate-500 hover:text-red-500 transition">
-                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                        </svg>
-                    </button>
+                    <h3 class="text-2xl font-bold text-white">Edit User Details</h3>
+                    <a href="users.php" class="text-slate-500 hover:text-red-500 transition">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </a>
                 </div>
-                <p class="text-slate-400 text-sm mb-6" id="editUserName"></p>
                 <form method="POST" class="space-y-4">
-                    <input type="hidden" name="user_id" id="editUserId">
+                    <input type="hidden" name="user_id" value="<?= $edit_user['user_id'] ?>">
                     <div>
-                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">Assigned Tasks</label>
-                        <div class="bg-slate-900 border border-slate-700 rounded-xl p-4 space-y-2 max-h-60 overflow-y-auto custom-scroll" id="tasksList">
-                            <!-- Tasks will be loaded here -->
+                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">Full Name</label>
+                        <input type="text" name="name" value="<?= htmlspecialchars($edit_user['name']) ?>" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-white focus:outline-none focus:border-red-600 transition" required>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">Role</label>
+                        <select name="role" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-white focus:outline-none focus:border-red-600 transition">
+                            <option value="QC Operator" <?= $edit_user['role'] == 'QC Operator' ? 'selected' : '' ?>>QC Operator</option>
+                            <option value="Store Manager" <?= $edit_user['role'] == 'Store Manager' ? 'selected' : '' ?>>Store Manager</option>
+                            <option value="Admin" <?= $edit_user['role'] == 'Admin' ? 'selected' : '' ?>>Admin</option>
+                            <option value="Supervisor" <?= $edit_user['role'] == 'Supervisor' ? 'selected' : '' ?>>Supervisor</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-2">New Password (Leave blank to keep current)</label>
+                        <input type="text" name="password" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-xl text-white focus:outline-none focus:border-red-600 transition" placeholder="Enter new password">
+                    </div>
+                    <div class="flex gap-4 pt-4">
+                        <button type="submit" name="edit_user_details" class="flex-1 bg-red-600 hover:bg-red-700 py-4 rounded-xl font-black text-white transition text-xs uppercase tracking-wider">UPDATE USER</button>
+                        <a href="users.php" class="px-8 bg-slate-800 hover:bg-slate-700 rounded-xl text-white transition text-xs font-black uppercase tracking-wider flex items-center justify-center">CANCEL</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- Edit Tasks Modal -->
+    <?php if(isset($_GET['edit_tasks_id'])): 
+        $tasks_user_id = (int)$_GET['edit_tasks_id'];
+        $tasks_user_stmt = $pdo->prepare("SELECT name FROM users WHERE user_id = ?");
+        $tasks_user_stmt->execute([$tasks_user_id]);
+        $tasks_user = $tasks_user_stmt->fetch();
+        
+        $user_tasks_ids = [];
+        $task_stmt = $pdo->prepare("SELECT task_id FROM user_tasks WHERE user_id = ?");
+        $task_stmt->execute([$tasks_user_id]);
+        $user_tasks_ids = $task_stmt->fetchAll(PDO::FETCH_COLUMN);
+    ?>
+    <div id="editModal" class="fixed inset-0 bg-black/95 backdrop-blur-xl z-50 flex items-center justify-center p-4 modal-transition" style="display: flex;">
+        <div class="bg-[#0f172a] border border-slate-800 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto custom-scroll">
+            <div class="p-8">
+                <div class="flex justify-between items-center mb-6">
+                    <div>
+                        <h3 class="text-2xl font-bold text-white">Manage User Tasks</h3>
+                        <p class="text-slate-500 text-xs mt-1">Editing tasks for: <span class="text-red-500 font-bold"><?= htmlspecialchars($tasks_user['name'] ?? 'User') ?></span></p>
+                    </div>
+                    <a href="users.php" class="text-slate-500 hover:text-red-500 transition">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </a>
+                </div>
+                <form method="POST" class="space-y-4">
+                    <input type="hidden" name="user_id" value="<?= $tasks_user_id ?>">
+                    <div>
+                        <label class="text-slate-400 text-xs font-black uppercase tracking-wider block mb-3">Select Tasks to Assign</label>
+                        <div class="bg-slate-900 border border-slate-700 rounded-xl p-4 space-y-2 max-h-60 overflow-y-auto custom-scroll">
+                            <?php foreach($all_tasks as $task): ?>
+                                <label class="flex items-start gap-3 cursor-pointer hover:bg-slate-800/50 p-3 rounded-lg transition">
+                                    <input type="checkbox" name="tasks[]" value="<?= $task['task_id'] ?>" <?= in_array($task['task_id'], $user_tasks_ids) ? 'checked' : '' ?> class="w-4 h-4 mt-1 rounded border-slate-600">
+                                    <div class="flex-1">
+                                        <span class="text-white text-sm font-bold block"><?= htmlspecialchars($task['task_name']) ?></span>
+                                        <p class="text-slate-500 text-xs mt-0.5"><?= htmlspecialchars($task['description'] ?? 'No description') ?></p>
+                                    </div>
+                                </label>
+                            <?php endforeach; ?>
                         </div>
                     </div>
                     <div class="flex gap-4 pt-4">
                         <button type="submit" name="edit_tasks" class="flex-1 bg-red-600 hover:bg-red-700 py-4 rounded-xl font-black text-white transition text-xs uppercase tracking-wider">UPDATE TASKS</button>
-                        <button type="button" onclick="closeEditModal()" class="px-8 bg-slate-800 hover:bg-slate-700 rounded-xl text-white transition text-xs font-black uppercase tracking-wider">CANCEL</button>
+                        <a href="users.php" class="px-8 bg-slate-800 hover:bg-slate-700 rounded-xl text-white transition text-xs font-black uppercase tracking-wider flex items-center justify-center">CANCEL</a>
                     </div>
                 </form>
             </div>
         </div>
     </div>
+    <?php endif; ?>
 
     <script>
-        // Real-time Clock
         function updateTime() {
             const options = { timeZone: 'Asia/Colombo', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
             document.getElementById('clock').innerText = new Intl.DateTimeFormat('en-GB', options).format(new Date());
         }
         setInterval(updateTime, 1000);
         updateTime();
-
-        function openAddModal() {
-            document.getElementById('addModal').classList.remove('hidden');
-        }
-        
-        function closeAddModal() {
-            document.getElementById('addModal').classList.add('hidden');
-        }
-        
-        async function editUserTasks(userId, userName) {
-            document.getElementById('editUserId').value = userId;
-            document.getElementById('editUserName').innerHTML = `Editing tasks for: <span class="text-red-500 font-bold">${escapeHtml(userName)}</span>`;
-            
-            // Fetch current user tasks
-            try {
-                const response = await fetch(`get_user_tasks.php?user_id=${userId}`);
-                const data = await response.json();
-                
-                const tasksList = document.getElementById('tasksList');
-                tasksList.innerHTML = '';
-                
-                if (data.all_tasks && data.all_tasks.length > 0) {
-                    data.all_tasks.forEach(task => {
-                        const isChecked = data.user_tasks && data.user_tasks.includes(task.task_id);
-                        tasksList.innerHTML += `
-                            <label class="flex items-start gap-3 cursor-pointer hover:bg-slate-800 p-3 rounded-lg transition">
-                                <input type="checkbox" name="tasks[]" value="${task.task_id}" ${isChecked ? 'checked' : ''} class="w-4 h-4 mt-1 rounded border-slate-600">
-                                <div class="flex-1">
-                                    <span class="text-white text-sm font-bold block">${escapeHtml(task.task_name)}</span>
-                                    <p class="text-slate-500 text-xs mt-0.5">${escapeHtml(task.description || 'No description')}</p>
-                                </div>
-                            </label>
-                        `;
-                    });
-                } else {
-                    tasksList.innerHTML = '<p class="text-slate-500 text-center p-4">No tasks available</p>';
-                }
-                
-                document.getElementById('editModal').classList.remove('hidden');
-            } catch (error) {
-                console.error('Error fetching tasks:', error);
-                Swal.fire({
-                    icon: 'error',
-                    title: 'Error',
-                    text: 'Failed to load tasks',
-                    background: '#0f172a',
-                    color: '#fff'
-                });
-            }
-        }
-        
-        function closeEditModal() {
-            document.getElementById('editModal').classList.add('hidden');
-        }
-        
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-        
-        // Close modals on escape key
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') {
-                closeAddModal();
-                closeEditModal();
-            }
-        });
-        
-        // Close modals when clicking outside
-        window.addEventListener('click', function(e) {
-            const addModal = document.getElementById('addModal');
-            const editModal = document.getElementById('editModal');
-            if (e.target === addModal) closeAddModal();
-            if (e.target === editModal) closeEditModal();
-        });
     </script>
 </body>
 </html>
