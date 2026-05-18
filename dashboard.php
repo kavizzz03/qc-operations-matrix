@@ -4,7 +4,7 @@ require_once 'task_helper.php';
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
-}
+}                                
 
 // Check if user is logged in - prevent redirect loop
 if (!isset($_SESSION['user_id'])) {
@@ -264,6 +264,20 @@ $baseQuery = http_build_query($queryParams);
                 size: A4;
                 margin: 15mm;
             }
+        }
+        
+        /* Loading animation */
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 </head>
@@ -672,6 +686,7 @@ $baseQuery = http_build_query($queryParams);
 
     <script>
         let currentPrintData = null;
+        let currentItemsData = null;
 
         function updateTime() {
             const options = { timeZone: 'Asia/Colombo', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
@@ -685,6 +700,7 @@ $baseQuery = http_build_query($queryParams);
                 const res = await fetch(`get_details.php?id=${id}`);
                 const data = await res.json();
                 currentPrintData = data;
+                currentItemsData = data.items;
                 
                 const printContent = generatePrintHTML(data);
                 document.getElementById('printReportContent').innerHTML = printContent;
@@ -707,14 +723,12 @@ $baseQuery = http_build_query($queryParams);
 
             return `
                 <div class="print-container" style="padding: 15mm; font-family: Arial, sans-serif;">
-                    <!-- Header -->
                     <div class="print-header" style="text-align: center; border-bottom: 3px solid #dc2626; padding-bottom: 15px; margin-bottom: 20px;">
                         <h1 style="font-size: 28px; font-weight: bold; margin: 0; color: #1f2937;">ASB FASHION</h1>
                         <p style="font-size: 14px; margin: 5px 0; color: #dc2626; font-weight: bold;">Quality Control & Return Management System</p>
                         <p style="font-size: 11px; color: #6b7280; margin: 5px 0;">QC Damage Report - Official Document</p>
                     </div>
 
-                    <!-- Reference Info -->
                     <div class="print-section" style="margin-bottom: 25px;">
                         <div class="print-section-title" style="background: #f3f4f6; padding: 8px 12px; border-left: 4px solid #dc2626; font-weight: bold; margin-bottom: 15px;">
                             📋 DOCUMENT INFORMATION
@@ -747,7 +761,6 @@ $baseQuery = http_build_query($queryParams);
                         </div>
                     </div>
 
-                    <!-- Supplier Information -->
                     <div class="print-section" style="margin-bottom: 25px;">
                         <div class="print-section-title" style="background: #f3f4f6; padding: 8px 12px; border-left: 4px solid #dc2626; font-weight: bold; margin-bottom: 15px;">
                             🏭 SUPPLIER INFORMATION
@@ -768,7 +781,6 @@ $baseQuery = http_build_query($queryParams);
                         </div>
                     </div>
 
-                    <!-- Status Flags -->
                     <div class="print-section" style="margin-bottom: 25px;">
                         <div class="print-section-title" style="background: #f3f4f6; padding: 8px 12px; border-left: 4px solid #dc2626; font-weight: bold; margin-bottom: 15px;">
                             🚦 LOGISTICS STATUS FLAGS
@@ -798,7 +810,6 @@ $baseQuery = http_build_query($queryParams);
                         </table>
                     </div>
 
-                    <!-- Damage Items -->
                     <div class="print-section" style="margin-bottom: 25px;">
                         <div class="print-section-title" style="background: #f3f4f6; padding: 8px 12px; border-left: 4px solid #dc2626; font-weight: bold; margin-bottom: 15px;">
                             📦 DAMAGE INVENTORY
@@ -813,8 +824,8 @@ $baseQuery = http_build_query($queryParams);
                             <tbody>
                                 ${items && items.length > 0 ? items.map(item => `
                                     <tr>
-                                        <td style="padding: 8px; border: 1px solid #d1d5db;">${item.item_code || 'N/A'}</td>
-                                        <td style="padding: 8px; border: 1px solid #d1d5db;">${item.description || 'No description'}</td>
+                                        <td style="padding: 8px; border: 1px solid #d1d5db;">${escapeHtml(item.item_code) || 'N/A'}</td>
+                                        <td style="padding: 8px; border: 1px solid #d1d5db;">${escapeHtml(item.description) || 'No description'}</td>
                                         <td style="padding: 8px; border: 1px solid #d1d5db; text-align: center;">${item.quantity || 0}</td>
                                     </tr>
                                 `).join('') : `
@@ -824,7 +835,6 @@ $baseQuery = http_build_query($queryParams);
                         </table>
                     </div>
 
-                    <!-- Footer & Signatures -->
                     <div class="print-footer" style="margin-top: 30px; padding-top: 15px; border-top: 1px solid #e5e7eb;">
                         <div class="print-signature" style="display: flex; justify-content: space-between; margin-top: 20px;">
                             <div class="print-signature-line" style="text-align: center;">
@@ -851,6 +861,13 @@ $baseQuery = http_build_query($queryParams);
             `;
         }
 
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         function printReportFromModal() {
             window.print();
         }
@@ -864,6 +881,7 @@ $baseQuery = http_build_query($queryParams);
                 const res = await fetch(`get_details.php?id=${id}`);
                 const data = await res.json();
                 window.currentRecord = data.main;
+                window.currentItems = data.items;
                 
                 document.getElementById('modalRef').innerText = data.main.reference_number;
                 document.getElementById('mDate').innerText = "Recorded: " + data.main.record_date;
@@ -892,155 +910,432 @@ $baseQuery = http_build_query($queryParams);
                         <div class="flex-1">
                             <p class="text-[9px] font-black uppercase tracking-widest ${t.user ? 'text-white' : 'text-slate-600'}">${t.label}</p>
                             <p class="text-[10px] font-bold text-slate-500 mt-1">${t.user || '⏳ WAITING...'}</p>
-                            ${t.date ? `<p class="text-[8px] font-mono text-slate-700 mt-0.5">${t.date}</p>` : ''}
+                            ${t.date ? `<p class="text-[8px] font-mono text-slate-700 mt-0.5">${new Date(t.date).toLocaleString()}</p>` : ''}
                         </div>
                     </div>
                 `).join('');
 
                 document.getElementById('mItems').innerHTML = data.items.map(i => `
                     <div class="flex justify-between items-center bg-slate-900 p-4 rounded-2xl border border-slate-800/50">
-                        <div><p class="text-white font-black text-xs uppercase">📦 ${i.item_code}</p></div>
+                        <div><p class="text-white font-black text-xs uppercase">📦 ${escapeHtml(i.item_code)}</p>
+                        ${i.description ? `<p class="text-slate-500 text-[9px] mt-1">${escapeHtml(i.description)}</p>` : ''}
+                        </div>
                         <span class="bg-red-600/10 text-red-500 px-4 py-2 rounded-xl font-black text-xs">QTY: ${i.quantity}</span>
                     </div>
                 `).join('');
 
                 document.getElementById('detailModal').classList.remove('hidden');
             } catch (err) {
+                console.error('Error:', err);
                 Swal.fire({ icon: 'error', title: 'Error', text: 'Could not load record details.', background: '#0f172a', color: '#fff' });
             }
         }
 
-async function updateFlag(event, id, column) {
-    event.stopPropagation();
-    event.preventDefault();
-    
-    const columnNames = {
-        'is_informed': 'Supplier Informed',
-        'is_store_received': 'Store Received',
-        'is_gate_cleared': 'Gate Cleared',
-        'is_handover_complete': 'Return Complete'
-    };
-    const displayName = columnNames[column] || column;
-    
-    const result = await Swal.fire({
-        title: 'Update Status?',
-        html: `Mark <strong>${displayName}</strong> as complete?`,
-        icon: 'question',
-        showCancelButton: true,
-        background: '#0f172a',
-        color: '#fff',
-        confirmButtonColor: '#dc2626',
-        cancelButtonColor: '#1e293b',
-        confirmButtonText: 'Yes, Update',
-        cancelButtonText: 'Cancel'
-    });
-    
-    if (!result.isConfirmed) return;
+        async function updateFlag(event, id, column) {
+            event.stopPropagation();
+            event.preventDefault();
+            
+            const columnNames = {
+                'is_informed': 'Supplier Informed',
+                'is_store_received': 'Store Received',
+                'is_gate_cleared': 'Gate Cleared',
+                'is_handover_complete': 'Return Complete'
+            };
+            const displayName = columnNames[column] || column;
+            
+            const result = await Swal.fire({
+                title: 'Update Status?',
+                html: `Mark <strong>${displayName}</strong> as complete?`,
+                icon: 'question',
+                showCancelButton: true,
+                background: '#0f172a',
+                color: '#fff',
+                confirmButtonColor: '#dc2626',
+                cancelButtonColor: '#1e293b',
+                confirmButtonText: 'Yes, Update',
+                cancelButtonText: 'Cancel'
+            });
+            
+            if (!result.isConfirmed) return;
 
-    // Show loading
+            Swal.fire({
+                title: 'Updating...',
+                text: 'Please wait',
+                allowOutsideClick: false,
+                didOpen: () => {
+                    Swal.showLoading();
+                }
+            });
+
+            try {
+                const formData = new URLSearchParams();
+                formData.append('id', id);
+                formData.append('column', column);
+                
+                const res = await fetch('update_flag.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: formData.toString()
+                });
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Updated!',
+                        text: data.message,
+                        toast: true,
+                        position: 'top-end',
+                        showConfirmButton: false,
+                        timer: 1500,
+                        background: '#0f172a',
+                        color: '#fff'
+                    });
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1500);
+                } else {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Failed',
+                        text: data.message,
+                        background: '#0f172a',
+                        color: '#fff'
+                    });
+                }
+            } catch (err) {
+                console.error('Error:', err);
+                Swal.fire({
+                    icon: 'error',
+                    title: 'System Error',
+                    text: err.message || 'An error occurred. Please try again.',
+                    background: '#0f172a',
+                    color: '#fff'
+                });
+            }
+        }
+        
+      function setupCommButton(btnId, hasValue, isSent) {
+
+    const btn = document.getElementById(btnId);
+
+    if (!hasValue || hasValue === "NOT SET") {
+
+        btn.disabled = true;
+
+        btn.innerText = "⚠ NO DATA";
+
+        btn.className =
+            "w-full py-4 rounded-xl bg-slate-800/50 text-slate-700 cursor-not-allowed text-[10px] font-black uppercase tracking-widest";
+
+    } else {
+
+        btn.disabled = false;
+
+        btn.innerText = isSent == 1
+            ? "🔄 Resend"
+            : "📤 Dispatch";
+
+        btn.className = isSent == 1
+            ? "w-full py-4 rounded-xl border border-green-500/30 text-green-500 hover:bg-green-500 hover:text-white transition-all"
+            : "w-full py-4 rounded-xl bg-red-600 text-white hover:bg-red-700 transition-all shadow-xl";
+    }
+}
+
+async function handleComms(type) {
+
+    /*
+    |--------------------------------------------------------------------------
+    | CHECK RECORD
+    |--------------------------------------------------------------------------
+    */
+
+    if (!window.currentRecord || !window.currentRecord.record_id) {
+
+        Swal.fire({
+            icon: 'error',
+            title: 'Error',
+            text: 'No record selected',
+            background: '#0f172a',
+            color: '#ffffff'
+        });
+
+        return;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | GET RECIPIENT
+    |--------------------------------------------------------------------------
+    */
+
+    const recipient =
+        type === 'email'
+            ? window.currentRecord.email
+            : window.currentRecord.contact_number;
+
+    const recipientLabel =
+        type === 'email'
+            ? 'Email'
+            : 'SMS';
+
+    /*
+    |--------------------------------------------------------------------------
+    | AUTH PASSWORD
+    |--------------------------------------------------------------------------
+    */
+
+    const { value: pass } = await Swal.fire({
+
+        title: `Authorize ${recipientLabel} Communication`,
+
+        html:
+            `You are about to send a ${recipientLabel.toUpperCase()} to:<br><br>
+            <strong class="text-red-500">${recipient}</strong><br><br>
+            Please enter system key:`,
+
+        input: 'password',
+
+        inputPlaceholder: 'System Key',
+
+        inputAttributes: {
+            maxlength: 50,
+            autocapitalize: 'off',
+            autocorrect: 'off'
+        },
+
+        showCancelButton: true,
+
+        confirmButtonText: `Send ${recipientLabel}`,
+
+        cancelButtonText: 'Cancel',
+
+        background: '#0f172a',
+
+        color: '#ffffff',
+
+        confirmButtonColor: '#dc2626',
+
+        cancelButtonColor: '#1e293b'
+    });
+
+    if (!pass) return;
+
+    /*
+    |--------------------------------------------------------------------------
+    | LOADING
+    |--------------------------------------------------------------------------
+    */
+
     Swal.fire({
-        title: 'Updating...',
-        text: 'Please wait',
+        title: `Sending ${recipientLabel}...`,
+        text: 'Please wait while we process your request',
         allowOutsideClick: false,
+        background: '#0f172a',
+        color: '#ffffff',
         didOpen: () => {
             Swal.showLoading();
         }
     });
 
     try {
+
+        /*
+        |--------------------------------------------------------------------------
+        | FORM DATA
+        |--------------------------------------------------------------------------
+        */
+
         const formData = new URLSearchParams();
-        formData.append('id', id);
-        formData.append('column', column);
-        
-        const res = await fetch('update_flag.php', {
+
+        formData.append('id', window.currentRecord.record_id);
+
+        formData.append('type', type);
+
+        formData.append('auth_pass', pass);
+
+        /*
+        |--------------------------------------------------------------------------
+        | SEND REQUEST
+        |--------------------------------------------------------------------------
+        */
+
+        const response = await fetch('send_comms.php', {
+
             method: 'POST',
+
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
             },
+
             body: formData.toString()
         });
-        
-        const data = await res.json();
-        
-        if (data.success) {
-            Swal.fire({
-                icon: 'success',
-                title: 'Updated!',
-                text: data.message,
-                toast: true,
-                position: 'top-end',
-                showConfirmButton: false,
-                timer: 1500,
-                background: '#0f172a',
-                color: '#fff'
-            });
-            setTimeout(() => {
-                window.location.reload();
-            }, 1500);
-        } else {
+
+        /*
+        |--------------------------------------------------------------------------
+        | RAW RESPONSE
+        |--------------------------------------------------------------------------
+        */
+
+        const rawText = await response.text();
+
+        console.log("RAW RESPONSE:", rawText);
+
+        /*
+        |--------------------------------------------------------------------------
+        | JSON PARSE
+        |--------------------------------------------------------------------------
+        */
+
+        let data;
+
+        try {
+
+            data = JSON.parse(rawText);
+
+        } catch (jsonError) {
+
+            console.error("INVALID JSON RESPONSE");
+
             Swal.fire({
                 icon: 'error',
-                title: 'Failed',
-                text: data.message,
+                title: 'PHP Fatal Error',
+                html: `
+                    <div style="
+                        text-align:left;
+                        max-height:400px;
+                        overflow:auto;
+                        background:#111827;
+                        padding:15px;
+                        border-radius:10px;
+                        font-size:12px;
+                        color:#f87171;
+                    ">
+                        <pre style="white-space:pre-wrap;">${rawText}</pre>
+                    </div>
+                `,
                 background: '#0f172a',
-                color: '#fff'
+                color: '#ffffff',
+                width: 900,
+                confirmButtonColor: '#dc2626'
+            });
+
+            return;
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | SUCCESS
+        |--------------------------------------------------------------------------
+        */
+
+        if (data.success) {
+
+            Swal.fire({
+                icon: 'success',
+                title: `${recipientLabel} Sent Successfully`,
+                html: `
+                    The ${recipientLabel.toLowerCase()} has been successfully sent.
+                    <br><br>
+                    <small class="text-slate-400">
+                        Recipient: ${recipient}
+                    </small>
+                `,
+                background: '#0f172a',
+                color: '#ffffff',
+                confirmButtonColor: '#16a34a'
+            }).then(() => {
+
+                if (typeof viewAudit === 'function') {
+
+                    viewAudit(window.currentRecord.record_id);
+                }
+            });
+
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | FAILED
+        |--------------------------------------------------------------------------
+        */
+
+        else {
+
+            Swal.fire({
+                icon: 'error',
+                title: 'Failed to Send',
+                html: `
+                    <div style="text-align:left;">
+                        <strong>Error:</strong><br>
+                        ${data.message || 'Unknown error'}
+                    </div>
+                `,
+                background: '#0f172a',
+                color: '#ffffff',
+                confirmButtonColor: '#dc2626'
             });
         }
-    } catch (err) {
-        console.error('Error:', err);
+
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | SYSTEM ERROR
+    |--------------------------------------------------------------------------
+    */
+
+    catch (err) {
+
+        console.error('SYSTEM ERROR:', err);
+
         Swal.fire({
             icon: 'error',
             title: 'System Error',
-            text: err.message || 'An error occurred. Please try again.',
+            html: `
+                <div style="text-align:left;">
+                    ${err.message || 'Unknown system error'}
+                </div>
+            `,
             background: '#0f172a',
-            color: '#fff'
+            color: '#ffffff',
+            confirmButtonColor: '#dc2626'
         });
     }
 }
-        function setupCommButton(btnId, hasValue, isSent) {
-            const btn = document.getElementById(btnId);
-            if (!hasValue || hasValue === "NOT SET") {
-                btn.disabled = true; 
-                btn.innerText = "⚠ NO DATA";
-                btn.className = "w-full py-4 rounded-xl bg-slate-800/50 text-slate-700 cursor-not-allowed text-[10px] font-black uppercase tracking-widest";
-            } else {
-                btn.disabled = false;
-                btn.innerText = isSent == 1 ? "🔄 Resend" : "📤 Dispatch";
-                btn.className = isSent == 1 ? "w-full py-4 rounded-xl border border-green-500/30 text-green-500 hover:bg-green-500 hover:text-white transition-all" : "w-full py-4 rounded-xl bg-red-600 text-white hover:bg-red-700 transition-all shadow-xl";
-            }
-        }
 
-        async function handleComms(type) {
-            const { value: pass } = await Swal.fire({ 
-                title: 'Authorize', input: 'password', inputPlaceholder: 'System Key',
-                background: '#0f172a', color: '#fff', confirmButtonColor: '#dc2626'
-            });
-            if (!pass) return;
-            const p = new URLSearchParams(); 
-            p.append('id', window.currentRecord.record_id); 
-            p.append('type', type);
-            p.append('auth_pass', pass);
-            fetch('send_comms.php', { method: 'POST', body: p })
-            .then(res => res.json())
-            .then(data => {
-                if (data.success) {
-                    Swal.fire({ icon: 'success', title: 'Sent!', background: '#0f172a', color: '#fff' }).then(() => viewAudit(window.currentRecord.record_id));
-                } else {
-                    Swal.fire({ icon: 'error', title: 'Failed', text: data.message, background: '#0f172a', color: '#fff' });
-                }
-            });
-        }
+/*
 
-        function closeModal() { 
-            document.getElementById('detailModal').classList.add('hidden'); 
+|--------------------------------------------------------------------------
+| CLOSE MODALS
+|--------------------------------------------------------------------------
+*/
+
+function closeModal() {
+
+    document
+        .getElementById('detailModal')
+        .classList
+        .add('hidden');
+}
+
+document.onkeydown = function(evt) {
+
+    evt = evt || window.event;
+
+    if (evt.keyCode == 27) {
+
+        closeModal();
+
+        if (typeof closePrintModal === 'function') {
+
+            closePrintModal();
         }
-        
-        document.onkeydown = function(evt) { 
-            if (evt.keyCode == 27) {
-                closeModal();
-                closePrintModal();
-            }
-        };
+    }
+};
     </script>
 </body>
 </html>
