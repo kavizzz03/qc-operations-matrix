@@ -86,7 +86,7 @@ $records = $stmt->fetchAll();
             <a href="dashboard.php" class="bg-slate-900 border border-slate-800 px-6 py-3 rounded-xl text-[10px] font-black uppercase text-slate-400 tracking-wider">Dashboard</a>
         </div>
 
-        <form class="glass p-6 rounded-[2rem] mb-8 flex flex-wrap gap-4">
+        <form class="glass p-6 rounded-[2rem] mb-8 flex flex-wrap gap-4" method="GET">
             <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search Ref / Invoice / Doc / Supplier / Mode..." class="flex-1 bg-slate-800/50 border-none rounded-xl px-5 text-sm text-white placeholder:text-slate-600 font-medium focus:ring-1 focus:ring-red-600 outline-none">
             <button type="submit" class="bg-red-600 hover:bg-red-700 text-white px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-wider transition">Filter Matrix</button>
         </form>
@@ -102,6 +102,13 @@ $records = $stmt->fetchAll();
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-800/50 text-slate-300">
+                    <?php if (empty($records)): ?>
+                    <tr>
+                        <td colspan="4" class="px-8 py-10 text-center text-sm font-semibold text-slate-500 uppercase tracking-wider">
+                            No damage matching reference entries found in matrix index.
+                        </td>
+                    </tr>
+                    <?php endif; ?>
                     <?php foreach($records as $row): ?>
                     <tr class="hover:bg-slate-800/20 transition">
                         <td class="px-8 py-6">
@@ -110,7 +117,7 @@ $records = $stmt->fetchAll();
                         </td>
                         <td class="px-8 py-6">
                             <div class="text-xs font-bold text-slate-200"><?= htmlspecialchars($row['supplier_name']) ?></div>
-                            <div class="text-[10px] text-slate-500 italic mt-0.5 truncate max-w-xs" title="<?= htmlspecialchars($row['reason_name'] ?? '') ?>">Reason: <?= htmlspecialchars($row['reason_name'] ?? 'Not Specified') ?></div>
+                            <div class="text-[10px] text-slate-500 italic mt-0.5 truncate max-w-xs" title="<?= htmlspecialchars($row['reason_name'] ?? 'Not Specified') ?>">Reason: <?= htmlspecialchars($row['reason_name'] ?? 'Not Specified') ?></div>
                         </td>
                         <td class="px-8 py-6">
                             <span class="bg-slate-900 border border-slate-800 px-2.5 py-1 rounded text-[9px] font-bold uppercase tracking-wider text-red-500">
@@ -209,6 +216,8 @@ $records = $stmt->fetchAll();
                     document.getElementById('pDocNumber').innerText = data.main.doc_number ? data.main.doc_number : 'N/A';
                     document.getElementById('pRef').innerText = '#' + ref;
                     document.getElementById('pDate').innerText = data.main.record_date;
+                    
+                    // Bind descriptive parameters safely with fallbacks matching main index layout
                     document.getElementById('pMode').innerText = data.main.mode_name ? data.main.mode_name : 'DEFAULT';
                     document.getElementById('pReason').innerText = data.main.reason_name ? data.main.reason_name : 'No explicit reason specified by management.';
 
@@ -237,6 +246,8 @@ $records = $stmt->fetchAll();
                         window.print();
                         window.location.reload();
                     }, 400);
+                } else {
+                    Swal.fire('Data Discrepancy', data.message || 'Unable to load transaction fields.', 'warning');
                 }
             } catch (err) { 
                 Swal.fire('System Failure', 'Failed to compile data metrics tree.', 'error'); 
