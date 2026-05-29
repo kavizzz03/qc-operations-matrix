@@ -1,6 +1,6 @@
 <?php
 // Database configuration
-$host = '127.0.0.1';
+$host = 'localhost';
 $dbname = 'return_qc';
 $username = 'root';
 $password = '';
